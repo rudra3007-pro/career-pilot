@@ -26,54 +26,80 @@ async function runTest(name, fn) {
   }
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// ─── Named Test Functions ─────────────────────────────────────────────────────
+
+async function testMongoDB() {
+  await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
+  await mongoose.disconnect();
+  return 'Connection closed cleanly';
+}
+
+async function testRedis() {
+  const stats = await getQueueStats();
+  if (!stats.available) {
+    throw new Error(`Redis unavailable — ${stats.reason ?? 'no reason provided'}`);
+  }
+  return `waiting=${stats.waiting} active=${stats.active} completed=${stats.completed}`;
+}
+
+async function testAI() {
+  const mockResume = "Software Engineer with 2 years of experience. Developed React apps.";
+  const result = await enhanceResume(mockResume, {
+    jobRole: 'Frontend Developer',
+    yearsOfExperience: '2',
+    skills: ['React', 'JavaScript'],
+  });
+  return `provider=${result.provider} tokens=${JSON.stringify(result.tokensUsed)}`;
+}
+
+async function testRapidAPI() {
+  const response = await axios.request({
+    method: 'GET',
+    url: `https://${process.env.RAPIDAPI_HOST}/search`,
+    params: { query: 'developer', page: '1', num_pages: '1' },
+    headers: {
+      'X-RapidAPI-Key': process.env.RAPIDAPI_KEY,
+      'X-RapidAPI-Host': process.env.RAPIDAPI_HOST,
+    },
+    timeout: 8000,
+  });
+  return `Found ${response.data?.data?.length ?? 0} jobs`;
+}
+
+// ─── Test Registry ────────────────────────────────────────────────────────────
+
+const ALL_TESTS = [
+  { name: 'MongoDB',             fn: testMongoDB  },
+  { name: 'Redis (BullMQ)',      fn: testRedis    },
+  { name: 'AI Service (Gemini)', fn: testAI       },
+  { name: 'RapidAPI (JSearch)',  fn: testRapidAPI },
+];
+
+// ─── CLI Flag ─────────────────────────────────────────────────────────────────
+
+const args = process.argv.slice(2);
+const serviceFlag = args.find(a => a.startsWith('--service='))?.split('=')[1];
+
+// ─── Runner ───────────────────────────────────────────────────────────────────
 
 async function runTests() {
   console.log('─'.repeat(68));
   console.log(' INTEGRATION TESTS — ' + new Date().toLocaleString());
   console.log('─'.repeat(68));
 
-  // 1. MONGODB
-  await runTest('MongoDB', async () => {
-    await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
-    await mongoose.disconnect();
-    return 'Connection closed cleanly';
-  });
+  const testsToRun = serviceFlag
+    ? ALL_TESTS.filter(t => t.name.toLowerCase().includes(serviceFlag.toLowerCase()))
+    : ALL_TESTS;
 
-  // 2. REDIS
-  await runTest('Redis (BullMQ)', async () => {
-  const stats = await getQueueStats();
-  if (!stats.available) {
-    throw new Error(`Redis unavailable — ${stats.reason ?? 'no reason provided'}`);
+  if (testsToRun.length === 0) {
+    console.error(`❌ No test matched --service=${serviceFlag}`);
+    console.error(`   Available: ${ALL_TESTS.map(t => t.name).join(', ')}`);
+    process.exit(1);
   }
-  return `waiting=${stats.waiting} active=${stats.active} completed=${stats.completed}`;
-});
 
-  // 3. AI / LANGCHAIN
-  await runTest('AI Service (Gemini)', async () => {
-    const mockResume = "Software Engineer with 2 years of experience. Developed React apps.";
-    const result = await enhanceResume(mockResume, {
-      jobRole: 'Frontend Developer',
-      yearsOfExperience: '2',
-      skills: ['React', 'JavaScript'],
-    });
-    return `provider=${result.provider} tokens=${JSON.stringify(result.tokensUsed)}`;
-  });
-
-  // 4. RAPIDAPI
-  await runTest('RapidAPI (JSearch)', async () => {
-    const response = await axios.request({
-      method: 'GET',
-      url: `https://${process.env.RAPIDAPI_HOST}/search`,
-      params: { query: 'developer', page: '1', num_pages: '1' },
-      headers: {
-        'X-RapidAPI-Key': process.env.RAPIDAPI_KEY,
-        'X-RapidAPI-Host': process.env.RAPIDAPI_HOST,
-      },
-      timeout: 8000,
-    });
-    return `Found ${response.data?.data?.length ?? 0} jobs`;
-  });
+  for (const { name, fn } of testsToRun) {
+    await runTest(name, fn);
+  }
 
   // ─── Summary Table ───────────────────────────────────────────────────────────
 
@@ -88,7 +114,7 @@ async function runTests() {
     const icon = r.status === 'PASS' ? '✅' : '❌';
     const detail = String(r.detail ?? '');
     const trimmed = detail.length > 28 ? detail.slice(0, 25) + '...' : detail;
-    console.log(` ${col(r.name, 22)} ${icon} ${col(r.status, 5)} ${col(r.durationMs + 'ms', 8)} ${trimmed }`);
+    console.log(` ${col(r.name, 22)} ${icon} ${col(r.status, 5)} ${col(r.durationMs + 'ms', 8)} ${trimmed}`);
   }
 
   const passed = results.filter(r => r.status === 'PASS').length;
